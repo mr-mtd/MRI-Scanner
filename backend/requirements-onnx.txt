@@ -1,0 +1,3 @@
+# Optional: run an external pretrained segmentation model exported to ONNX.
+-r requirements.txt
+onnxruntime>=1.17
