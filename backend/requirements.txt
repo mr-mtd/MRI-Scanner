@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+numpy>=1.26
+scipy>=1.11
+nibabel>=5.2
+pydicom>=3.0
+# Optional: run a user-supplied ONNX segmentation model (MRI_BRAIN_ONNX)
+onnxruntime>=1.17
