@@ -20,6 +20,7 @@ from .measure import brain_location, describe_component
 from .volume import Volume
 
 MAX_FINDINGS = 50
+GROW_FRACTION = 0.5  # grow each seed to this fraction of its peak contrast
 
 
 def _ball(radius_mm: float, spacing) -> np.ndarray:
@@ -54,13 +55,26 @@ def extract_brain_mask(vol: Volume, already_skull_stripped: bool = False) -> np.
 
 
 def _bias_corrected(vol: Volume, brain: np.ndarray) -> np.ndarray:
-    """Divide out slow intensity drift (coil bias) estimated by heavy smoothing inside the brain."""
+    """Divide out slow intensity drift (coil bias) estimated by heavy smoothing inside the brain.
+
+    Two passes: voxels far from the first estimate (lesions, CSF) are left out of the second, so a
+    large tumour does not raise the estimated field around itself and get divided away.
+    """
     sigma = [25.0 / s for s in vol.spacing]
-    num = ndimage.gaussian_filter(np.where(brain, vol.data, 0).astype(np.float32), sigma)
-    den = ndimage.gaussian_filter(brain.astype(np.float32), sigma)
-    field = np.where(den > 1e-3, num / np.maximum(den, 1e-3), 0)
-    ref = float(np.median(vol.data[brain])) if brain.any() else 1.0
-    out = np.where(field > 0, vol.data / np.maximum(field, 1e-6) * ref, vol.data)
+    data = vol.data.astype(np.float32)
+    use = brain.copy()
+    field = None
+    for _ in range(2):
+        num = ndimage.gaussian_filter(np.where(use, data, 0), sigma)
+        den = ndimage.gaussian_filter(use.astype(np.float32), sigma)
+        field = np.where(den > 1e-3, num / np.maximum(den, 1e-3), 0)
+        ratio = np.where(field > 0, data / np.maximum(field, 1e-6), 0)
+        use = brain & (np.abs(ratio - 1) < 0.25)
+        if use.sum() < 0.3 * brain.sum():
+            use = brain
+            break
+    ref = float(np.median(data[brain])) if brain.any() else 1.0
+    out = np.where(field > 0, data / np.maximum(field, 1e-6) * ref, data)
     return ndimage.gaussian_filter(out.astype(np.float32), 0.7)
 
 
@@ -69,16 +83,24 @@ def candidate_mask_baseline(vol: Volume, brain: np.ndarray, sensitivity: float =
     """Return (candidate mask, robust z-score map).
 
     Seeds are voxels that are strong outliers (and brighter than the mirrored
-    hemisphere when asymmetry is on). Each seed is then grown to its half-maximum
-    contrast boundary, which keeps volume estimates from leaking into tissue.
+    hemisphere when asymmetry is on). Each seed is then grown to a fraction of its
+    peak contrast, which follows oedema around a core without leaking into tissue.
     """
     sm = _bias_corrected(vol, brain)
     inner = ndimage.binary_erosion(brain, structure=_ball(2.0, vol.spacing))
-    vals = sm[inner]
-    if vals.size < 100:
+    if inner.sum() < 100:
         return np.zeros(vol.shape, dtype=bool), np.zeros(vol.shape, dtype=np.float32)
-    med = float(np.median(vals))
     sign = 1.0 if polarity == "hyper" else -1.0
+    mid_x = float(ndimage.center_of_mass(brain)[0])
+    shift = 2 * mid_x - (vol.shape[0] - 1)
+    mirrored = ndimage.shift(np.flip(sm, axis=0), (shift, 0, 0), order=1, mode="nearest")
+
+    # Normal-tissue statistics from voxels that match the other hemisphere, so a large lesion does
+    # not inflate the reference it is compared with.
+    rough_med = float(np.median(sm[inner]))
+    normal = inner & (np.abs(sm - mirrored) < 0.15 * abs(rough_med))
+    vals = sm[normal] if normal.sum() > 0.2 * inner.sum() else sm[inner]
+    med = float(np.median(vals))
     # Scale from the tissue distribution's tail (p90 or p10) rather than the MAD alone, so the
     # normal grey/white matter contrast is not counted as abnormal.
     tail = float(np.percentile(vals, 90 if sign > 0 else 10))
@@ -88,22 +110,19 @@ def candidate_mask_baseline(vol: Volume, brain: np.ndarray, sensitivity: float =
 
     high = inner & (z > sensitivity)
     if use_asymmetry:
-        mid_x = float(ndimage.center_of_mass(brain)[0])
-        shift = 2 * mid_x - (vol.shape[0] - 1)
-        mirrored = ndimage.shift(np.flip(sm, axis=0), (shift, 0, 0), order=1, mode="nearest")
         high &= sign * (sm - mirrored) / mad > sensitivity * 0.5
     high = ndimage.binary_opening(high)
 
     seeds, n = ndimage.label(high, structure=np.ones((3, 3, 3)))
     out = np.zeros(vol.shape, dtype=bool)
-    margin = [int(np.ceil(15.0 / s)) for s in vol.spacing]
+    margin = [int(np.ceil(30.0 / s)) for s in vol.spacing]
     for i, sl in enumerate(ndimage.find_objects(seeds), start=1):
         if sl is None:
             continue
         box = tuple(slice(max(0, a.start - m), min(dim, a.stop + m)) for a, m, dim in zip(sl, margin, vol.shape))
         seed = seeds[box] == i
         peak = float(np.percentile(signed[box][seed], 90))
-        grown = inner[box] & (signed[box] > max(0.5 * peak, 0.5 * sensitivity * mad))
+        grown = inner[box] & (signed[box] > max(GROW_FRACTION * peak, 0.5 * sensitivity * mad))
         lab, _ = ndimage.label(grown, structure=np.ones((3, 3, 3)))
         keep = np.unique(lab[seed & grown])
         out[box] |= np.isin(lab, keep[keep > 0])

@@ -68,7 +68,7 @@ def spine_phantom(seed: int = 1):
     img = np.full(shape, 0.03, dtype=np.float32)
 
     body_y0, body_y1 = 0.0, 36.0       # vertebral bodies / discs (anterior column)
-    canal_y0 = body_y0 - 15.0           # thecal sac, AP 14 mm (1 mm dark posterior longitudinal ligament)
+    canal_y0 = body_y0 - 15.0           # thecal sac, AP 13 mm, walled by 3 mm of dark ligament / dura
     lr_body = np.abs(x) <= 22
     lr_canal = np.abs(x) <= 8
     zmin = z.min()
@@ -76,34 +76,37 @@ def spine_phantom(seed: int = 1):
     img[(y > body_y1) & (y < body_y1 + 50) & lr_body] = 0.35                     # prevertebral soft tissue
     img[(y < canal_y0) & (y > canal_y0 - 22) & lr_body] = 0.30                   # posterior elements
     img[(y <= canal_y0 - 22) & (y > canal_y0 - 38)] = 0.72                       # subcutaneous fat
-    in_canal = (y >= canal_y0) & (y < body_y0 - 1) & lr_canal
+    img[(y >= canal_y0 - 3) & (y < body_y0) & lr_body] = 0.04                   # ligamentum flavum, PLL
+    in_canal = (y >= canal_y0) & (y < body_y0 - 3) & lr_canal
     img[in_canal] = 1.0
 
     levels = ["L5-S1", "L4-L5", "L3-L4", "L2-L3", "L1-L2", "T12-L1"]
     disc_h, body_h = 9.0, 24.0
     cursor = zmin + 34.0               # top of S1
     in_column = (y >= body_y0) & (y <= body_y1) & lr_body
-    img[in_column & (z < cursor)] = 0.45
+    img[in_column & (z < cursor)] = 0.32
     disc_centers = {}
     for name in levels:
         d0, d1 = cursor, cursor + disc_h
         disc_centers[name] = (d0 + d1) / 2
-        signal = 0.22 if name == "L5-S1" else 0.80
+        signal = 0.15 if name == "L5-S1" else 0.70
         img[in_column & (z >= d0) & (z < d1)] = signal
         if name == "L4-L5":
             # Posterior protrusion 7 mm into the canal across the disc height.
-            bulge = (y < body_y0) & (y >= body_y0 - 8.0) & lr_canal & (z >= d0 - 1) & (z < d1 + 1)
-            img[bulge] = signal
+            # Posterior protrusion: disc material 7 mm into the canal, still rimmed by dark annulus.
+            rim = lr_canal & (z >= d0 - 3) & (z < d1 + 3) & (y < body_y0) & (y >= body_y0 - 12.0)
+            img[rim] = 0.04
+            img[lr_canal & (z >= d0 - 1) & (z < d1 + 1) & (y < body_y0) & (y >= body_y0 - 9.0)] = signal
         b1 = d1 + body_h
-        img[in_column & (z >= d1) & (z < b1)] = 0.45
+        img[in_column & (z >= d1) & (z < b1)] = 0.32
         cursor = b1
 
     img = ndimage.gaussian_filter(img, (0.3, 0.7, 0.7)) + rng.normal(0, 0.025, shape).astype(np.float32)
     img = np.clip(img, 0, None).astype(np.float32) * 1000
     affine = np.diag([*spacing, 1.0])
     affine[:3, 3] = -(np.array(shape) - 1) / 2 * np.array(spacing)
-    truth = {"stenosis_level": "L4-L5", "stenosis_ap_mm": 7.0, "normal_ap_mm": 14.0,
-             "protrusion_mm": 7.0, "desiccated_level": "L5-S1",
+    truth = {"stenosis_level": "L4-L5", "stenosis_ap_mm": 3.0, "normal_ap_mm": 12.0,
+             "protrusion_mm": 9.0, "desiccated_level": "L5-S1",
              "disc_center_z_mm": {k: round(v - zmin, 1) for k, v in disc_centers.items()}}
     nii = nib.Nifti1Image(img, affine)
     return from_nifti_image(nii, "demo", "Synthetic lumbar spine phantom (sagittal T2-like)"), truth

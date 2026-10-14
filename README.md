@@ -28,9 +28,13 @@ Volumes are reoriented to canonical RAS+ on load so measurements and left/right 
   standard, measurable stenosis criterion (about 12 mm relative, 10 mm absolute). Disc protrusion and
   disc signal loss are measured on the same slice. Foraminal stenosis, facets, fractures, cord signal
   and tumours are out of scope and not assessed.
-- Picks the midsagittal slice, segments the canal, plots AP diameter along the spine, locates discs,
-  and reports: **central canal narrowing** (min AP, reference AP, ratio, length, severity range),
-  **posterior disc protrusion** (depth into canal), and **disc T2 signal loss** (possible desiccation).
+- Picks the midsagittal slice (where the sac is widest) and segments the thecal sac wall to wall.
+  It corrects for lordosis, plots AP diameter along the spine, locates discs, and reports AP at
+  every disc level. Flags: **central canal narrowing** (focal narrowing below 75% of the
+  patient's own reference AP, with min AP, ratio, length and absolute severity range),
+  **posterior disc protrusion** (depth into canal) and **disc T2 signal loss** (possible
+  desiccation).
+- Above the conus the cord fills the sac, so narrowing is assessed below the detected conus only.
 - Levels are named assuming the lowest detected disc is L5-S1; the app flags this for verification.
 
 **Viewer and review**
@@ -42,6 +46,12 @@ Volumes are reoriented to canonical RAS+ on load so measurements and left/right 
   the whole flow runs without patient data.
 
 ## Screenshots
+
+Real BraTS glioma (FLAIR), with the tumour as candidate 1:
+
+![Real BraTS case](docs/real-data/real-brain-BRATS_445.png)
+
+Synthetic phantoms used by the demo buttons:
 
 ![Brain phantom with two candidate lesions](docs/brain.png)
 ![Lumbar spine phantom with canal profile](docs/spine.png)
@@ -97,12 +107,20 @@ published weights.
 
 ## Accuracy, as far as it is known
 
-On the bundled phantoms (see `backend/tests`): brain lesion volumes within about 6% of ground truth,
-both lesions found on the correct side; spine narrowing found at L4-L5 (7.2 mm measured vs 7 mm),
-the L4-L5 protrusion and the dark L5-S1 disc found. The canal segmentation reads about 1.5 mm
-narrow on the phantom. **None of this has been evaluated on real patient scans.** The classical
-detectors will produce false positives on real data (vessels, artefacts, normal bright structures)
-and are meant to be tuned with the threshold controls, or replaced by a trained model.
+**Real data** (full tables and images in [docs/real-data/VALIDATION.md](docs/real-data/VALIDATION.md)):
+- Brain, 8 held-out BraTS gliomas (FLAIR, skull-stripped): the tumour was the largest
+  candidate on the correct side in 8 of 8 cases. Mean whole-tumour Dice was 0.74 (0.55–0.90)
+  and volumes were within −33% to +20%. Every case also has smaller false-positive candidates.
+- Lumbar spine, 11 healthy-volunteer sagittal T2 scans (OpenNeuro ds008803): 10 of 11 had
+  no stenosis candidate and 1 had a likely false positive near the conus. Disc levels mostly
+  land on real discs. Stenosis detection itself is untested on real patients because no
+  labelled set was reachable.
+
+**Phantoms** (`backend/tests`): planted lesion volumes are within about 6%, and the spine phantom's
+L4-L5 stenosis, protrusion and dark L5-S1 disc are all found.
+
+The classical detectors are a baseline. They are meant to be tuned with the threshold
+controls or replaced with a trained model through the ONNX adapter.
 
 ## Layout
 
